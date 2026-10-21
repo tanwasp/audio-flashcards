@@ -14,9 +14,12 @@ You need at least the romanization or the written form. Works for any language: 
 
 - **Fast entry:** after saving, the form stays open with the language filled in, ready for the next card. The card you're writing (including its recording) is kept as a draft, so it survives the app being closed.
 - **Audio clean-up** (on by default, done on-device): cuts low rumble, quiets background hiss between words, trims silence at the start and end, and evens out volume. Recording also uses the browser's built-in noise suppression.
+- **Spaced repetition:** a simplified SM-2. Answer *Again*, *Good* or *Easy*; each button shows when the card will come back. The Today screen shows what's due plus a daily allowance of new cards. *Practice all* runs through everything without changing the schedule.
 - **Review** in three directions: *Listen* (audio → meaning), *Read* (romanization → meaning), *Recall* (English → say it). "Again" puts a card back into the session.
-- **Deck** with search, tap-to-play and tap-to-edit.
-- **Backup:** export / import the whole deck (audio included) as a JSON file.
+- **Streaks and goals:** hit your daily review goal to extend your streak. XP and levels, badges, an in-session combo counter, and a 17-week activity heatmap on the Progress screen.
+- **Daily reminder:** if you haven't hit your goal by the chosen hour, you get a notification. This uses Periodic Background Sync, so it only works in Chrome/Edge with the app installed. Safari (iPhone) and Firefox can't schedule notifications without a push server.
+- **Deck** with search, language filter, tap-to-play, tap-to-edit and each card's next review date.
+- **Backup:** export / import the whole deck (audio, progress and settings included) as a JSON file.
 
 All data is stored locally on your device (IndexedDB). There is no server or account. Export regularly to keep a backup.
 
@@ -44,8 +47,7 @@ When you change the app's files, bump `CACHE` in `sw.js` so old cached copies ar
 
 ## Ideas for later
 
-- Spaced repetition scheduling (SM-2) instead of a simple shuffle
 - Stronger noise removal (e.g. RNNoise via WebAssembly) for noisy recordings
 - Bulk import from CSV + a folder of audio files
-- Sync across devices (e.g. Supabase or Firebase storage)
+- Accounts and sync across devices (e.g. Supabase auth + storage), which would also allow real push reminders on iPhone
 - Auto-romanization (e.g. Jyutping via a dictionary like CC-Canto)

@@ -14,25 +14,68 @@
 </head>
 <body>
   <main>
+    <!-- Today -->
+    <section id="view-today" class="view">
+      <header class="view-head">
+        <div>
+          <p id="greeting" class="eyebrow"></p>
+          <h1>Today</h1>
+        </div>
+        <button type="button" id="level-pill" class="pill" data-goto="me"></button>
+      </header>
+
+      <div class="hero">
+        <div class="hero-top">
+          <div class="ring" id="goal-ring">
+            <svg viewBox="0 0 44 44" aria-hidden="true">
+              <circle class="track" cx="22" cy="22" r="19"/>
+              <circle class="fill" cx="22" cy="22" r="19" pathLength="100"/>
+            </svg>
+            <span class="flame" id="ring-flame">🔥</span>
+          </div>
+          <div class="hero-text">
+            <div class="streak-num"><span id="streak-count">0</span> day streak</div>
+            <div id="goal-text" class="muted"></div>
+          </div>
+        </div>
+        <ol class="week" id="week-strip" aria-label="This week"></ol>
+      </div>
+
+      <div class="panel" id="review-panel">
+        <div class="due-row">
+          <div class="due-stat"><span id="due-count">0</span><small>due</small></div>
+          <div class="due-stat"><span id="new-count">0</span><small>new</small></div>
+          <div class="due-stat"><span id="today-count">0</span><small>done today</small></div>
+        </div>
+        <div class="segmented" id="review-mode" role="radiogroup" aria-label="Review direction">
+          <button type="button" data-mode="audio" class="on">Listen</button>
+          <button type="button" data-mode="text">Read</button>
+          <button type="button" data-mode="english">Recall</button>
+        </div>
+        <p id="mode-hint" class="muted center small"></p>
+        <select id="review-language" aria-label="Language"><option value="">All languages</option></select>
+        <button id="start-review" class="btn primary block big">Start review</button>
+        <button id="start-practice" class="link center-block">Practice all cards instead</button>
+        <p id="review-empty" class="muted center" hidden></p>
+      </div>
+
+      <div class="empty-hero" id="today-empty" hidden>
+        <div class="emoji">🎧</div>
+        <h2>Build your first deck</h2>
+        <p class="muted">Record a word, add what it means, and come back each day to keep your streak going.</p>
+        <button class="btn primary" data-goto="add">Add a card</button>
+      </div>
+    </section>
+
     <!-- Deck -->
-    <section id="view-list" class="view">
+    <section id="view-list" class="view" hidden>
       <header class="view-head">
         <h1>Deck</h1>
         <span id="deck-count" class="muted"></span>
       </header>
-      <div class="toolbar">
-        <input id="search" type="search" placeholder="Search cards" autocomplete="off">
-        <select id="filter-language" aria-label="Language"><option value="">All</option></select>
-      </div>
+      <input id="search" type="search" placeholder="Search cards" autocomplete="off">
+      <div class="chips" id="filter-language" role="radiogroup" aria-label="Language"></div>
       <ul id="card-list"></ul>
-      <details class="backup">
-        <summary>Backup</summary>
-        <p class="muted">Cards are stored on this device only. Export a backup now and then.</p>
-        <div class="row">
-          <button id="export-btn" class="btn">Export deck</button>
-          <label class="btn">Import deck<input id="import-input" type="file" accept=".json" hidden></label>
-        </div>
-      </details>
     </section>
 
     <!-- Add / edit a card -->
@@ -86,44 +129,123 @@
       </form>
     </section>
 
-    <!-- Review -->
-    <section id="view-review" class="view" hidden>
+    <!-- Progress & settings -->
+    <section id="view-me" class="view" hidden>
       <header class="view-head">
-        <h1>Review</h1>
+        <h1>Progress</h1>
       </header>
 
-      <div id="review-setup">
-        <div class="segmented" id="review-mode" role="radiogroup" aria-label="Review direction">
-          <button type="button" data-mode="audio" class="on">Listen</button>
-          <button type="button" data-mode="text">Read</button>
-          <button type="button" data-mode="english">Recall</button>
+      <div class="panel level-card">
+        <div class="level-badge" id="level-num">1</div>
+        <div class="grow">
+          <div class="level-title">Level <span id="level-num-2">1</span></div>
+          <div class="xpbar"><div id="xp-fill"></div></div>
+          <div class="muted small" id="xp-text"></div>
         </div>
-        <p id="mode-hint" class="muted center"></p>
-        <label class="field">Language
-          <select id="review-language"><option value="">All languages</option></select>
-        </label>
-        <button id="start-review" class="btn primary block">Start</button>
-        <p id="review-empty" class="muted center" hidden></p>
       </div>
 
-      <div id="review-session" hidden>
+      <div class="tiles">
+        <div class="tile"><span id="stat-best">0</span><small>Best streak</small></div>
+        <div class="tile"><span id="stat-reviews">0</span><small>Reviews</small></div>
+        <div class="tile"><span id="stat-accuracy">–</span><small>Accuracy</small></div>
+        <div class="tile"><span id="stat-learned">0</span><small>Cards learned</small></div>
+      </div>
+
+      <h2 class="section">Activity</h2>
+      <div class="panel">
+        <div class="heatmap" id="heatmap" role="img"></div>
+        <div class="heat-legend muted small">
+          <span>Less</span><i class="h0"></i><i class="h1"></i><i class="h2"></i><i class="h3"></i><i class="h4"></i><span>More</span>
+        </div>
+        <p class="muted small" id="heat-detail">Tap a day for details.</p>
+      </div>
+
+      <h2 class="section">Badges <span class="muted small" id="badge-count"></span></h2>
+      <ul class="badges" id="badges"></ul>
+
+      <h2 class="section">Settings</h2>
+      <div class="panel settings">
+        <label class="setting">
+          <span>Daily goal<small>Reviews per day to keep your streak</small></span>
+          <select id="set-goal">
+            <option value="5">5</option><option value="10">10</option><option value="20">20</option>
+            <option value="30">30</option><option value="50">50</option>
+          </select>
+        </label>
+        <label class="setting">
+          <span>New cards per day<small>How many unseen cards to mix in</small></span>
+          <select id="set-new">
+            <option value="5">5</option><option value="10">10</option><option value="20">20</option>
+            <option value="50">50</option><option value="9999">No limit</option>
+          </select>
+        </label>
+        <label class="setting">
+          <span>Daily reminder<small id="reminder-note">Nudge me if I haven't hit my goal</small></span>
+          <input type="checkbox" id="set-reminders" class="switch">
+        </label>
+        <label class="setting" id="reminder-time-row" hidden>
+          <span>Remind me after</span>
+          <select id="set-reminder-hour"></select>
+        </label>
+      </div>
+
+      <h2 class="section">Backup</h2>
+      <div class="panel">
+        <p class="muted small">Cards and progress are stored on this device only. Export a backup now and then.</p>
+        <div class="row">
+          <button id="export-btn" class="btn grow">Export</button>
+          <label class="btn grow">Import<input id="import-input" type="file" accept=".json" hidden></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- Review session (full screen) -->
+    <section id="view-session" class="view" hidden>
+      <div class="session-top">
+        <button type="button" id="end-review" class="icon-btn" aria-label="End session">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
         <div class="progress"><div id="progress-bar"></div></div>
-        <div class="flashcard">
+        <span id="combo" class="combo" hidden></span>
+      </div>
+
+      <div id="session-card">
+        <div class="flashcard" id="flashcard">
+          <span class="card-tag" id="card-tag"></span>
           <div id="review-prompt"></div>
           <div id="review-answer" hidden></div>
         </div>
-        <div class="row review-actions">
-          <button id="reveal-btn" class="btn primary block">Show answer</button>
-          <button id="again-btn" class="btn grow" hidden>Again</button>
-          <button id="good-btn" class="btn primary grow" hidden>Got it</button>
+        <div class="review-actions">
+          <button id="reveal-btn" class="btn primary block big">Show answer <kbd>Space</kbd></button>
+          <div class="grades" id="grades" hidden>
+            <button class="btn grade again" data-grade="again">Again<small id="iv-again"></small></button>
+            <button class="btn grade good" data-grade="good">Good<small id="iv-good"></small></button>
+            <button class="btn grade easy" data-grade="easy">Easy<small id="iv-easy"></small></button>
+          </div>
         </div>
-        <button id="end-review" class="link center-block">End session</button>
+      </div>
+
+      <div id="session-done" class="done" hidden>
+        <div class="confetti" id="confetti" aria-hidden="true"></div>
+        <div class="emoji" id="done-emoji">🎉</div>
+        <h2 id="done-title">Session complete</h2>
+        <p class="muted" id="done-sub"></p>
+        <div class="tiles three">
+          <div class="tile"><span id="done-xp">0</span><small>XP earned</small></div>
+          <div class="tile"><span id="done-cards">0</span><small>Cards</small></div>
+          <div class="tile"><span id="done-acc">0%</span><small>Accuracy</small></div>
+        </div>
+        <button class="btn primary block big" id="done-btn">Continue</button>
       </div>
     </section>
   </main>
 
   <nav class="tabbar">
-    <button data-view="list" class="active">
+    <button data-view="today" class="active">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c1 3 4 4.5 4 8.5a4 4 0 0 1-8 0c0-1.5.6-2.6 1.5-3.5.3 1.2 1 2 2 2-.5-2.5 0-5 .5-7z"/><path d="M5 21h14"/></svg>
+      Today
+    </button>
+    <button data-view="list">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 3h12a2 2 0 0 1 2 2v12"/></svg>
       Deck
     </button>
@@ -131,9 +253,9 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
       Add
     </button>
-    <button data-view="review">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
-      Review
+    <button data-view="me">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      Progress
     </button>
   </nav>
 
