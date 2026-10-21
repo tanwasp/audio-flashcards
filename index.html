@@ -13,84 +13,131 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header>
-    <h1>Audio Flashcards</h1>
-    <nav>
-      <button data-view="add" class="active">Add card</button>
-      <button data-view="list">Deck</button>
-      <button data-view="review">Review</button>
-    </nav>
-  </header>
-
   <main>
+    <!-- Deck -->
+    <section id="view-list" class="view">
+      <header class="view-head">
+        <h1>Deck</h1>
+        <span id="deck-count" class="muted"></span>
+      </header>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search cards" autocomplete="off">
+        <select id="filter-language" aria-label="Language"><option value="">All</option></select>
+      </div>
+      <ul id="card-list"></ul>
+      <details class="backup">
+        <summary>Backup</summary>
+        <p class="muted">Cards are stored on this device only. Export a backup now and then.</p>
+        <div class="row">
+          <button id="export-btn" class="btn">Export deck</button>
+          <label class="btn">Import deck<input id="import-input" type="file" accept=".json" hidden></label>
+        </div>
+      </details>
+    </section>
+
     <!-- Add / edit a card -->
-    <section id="view-add" class="view">
-      <form id="card-form">
+    <section id="view-add" class="view" hidden>
+      <header class="view-head">
+        <h1 id="form-title">New card</h1>
+      </header>
+      <form id="card-form" novalidate>
         <input type="hidden" name="cardId">
-        <label>Language
-          <input name="language" list="languages" placeholder="Cantonese" required>
-          <datalist id="languages"></datalist>
+
+        <div class="audio-box">
+          <button type="button" id="record-btn" class="record" aria-label="Record">
+            <span class="dot"></span>
+          </button>
+          <div class="audio-side">
+            <div id="record-status" class="muted">Tap to record</div>
+            <audio id="audio-preview" controls hidden></audio>
+            <div class="row small">
+              <label class="link">Upload file<input type="file" name="audio" accept="audio/*" hidden></label>
+              <label class="check"><input type="checkbox" id="clean-audio" checked> Clean up audio</label>
+              <button type="button" id="remove-audio" class="link" hidden>Remove</button>
+            </div>
+          </div>
+        </div>
+
+        <label class="field">Romanization
+          <input name="romanization" placeholder="How it sounds" autocomplete="off" autocapitalize="off" spellcheck="false">
         </label>
-        <label>Written form
-          <input name="native" placeholder="你好" required>
+        <label class="field">English meaning
+          <input name="english" placeholder="What it means" autocomplete="off" required>
         </label>
-        <label>Romanization (optional)
-          <input name="romanization" placeholder="nei5 hou2">
+        <label class="field"><span>Written form <span class="opt">optional</span></span>
+          <input name="native" placeholder="In its own script" autocomplete="off">
         </label>
-        <label>English meaning
-          <input name="english" placeholder="Hello" required>
-        </label>
-        <label>Notes (optional)
-          <textarea name="notes" rows="2"></textarea>
-        </label>
-        <fieldset>
-          <legend>Audio</legend>
-          <input type="file" name="audio" accept="audio/*">
-          <button type="button" id="record-btn">● Record</button>
-          <audio id="audio-preview" controls hidden></audio>
-        </fieldset>
-        <div class="actions">
-          <button type="submit">Save card</button>
-          <button type="reset" id="cancel-edit">Clear</button>
+        <div class="grid-2">
+          <label class="field">Language
+            <input name="language" list="languages" placeholder="e.g. Japanese" autocomplete="off" required>
+            <datalist id="languages"></datalist>
+          </label>
+          <label class="field"><span>Notes <span class="opt">optional</span></span>
+            <input name="notes" autocomplete="off">
+          </label>
+        </div>
+        <p id="form-error" class="error" hidden></p>
+
+        <div class="row">
+          <button type="submit" class="btn primary grow">Save card</button>
+          <button type="button" id="delete-btn" class="btn danger" hidden>Delete</button>
+          <button type="reset" class="btn">Clear</button>
         </div>
       </form>
     </section>
 
-    <!-- Deck -->
-    <section id="view-list" class="view" hidden>
-      <div class="toolbar">
-        <input id="search" type="search" placeholder="Search…">
-        <select id="filter-language"><option value="">All languages</option></select>
-        <button id="export-btn">Export</button>
-        <label class="file-btn">Import<input id="import-input" type="file" accept=".json" hidden></label>
-      </div>
-      <ul id="card-list"></ul>
-    </section>
-
     <!-- Review -->
     <section id="view-review" class="view" hidden>
-      <div class="toolbar">
-        <select id="review-language"><option value="">All languages</option></select>
-        <select id="review-mode">
-          <option value="audio">Audio → meaning</option>
-          <option value="native">Written → meaning</option>
-          <option value="english">English → written</option>
-        </select>
-        <button id="start-review">Start</button>
-      </div>
-      <div id="review-card" hidden>
-        <div id="review-prompt"></div>
-        <div id="review-answer" hidden></div>
-        <div class="actions">
-          <button id="reveal-btn">Show answer</button>
-          <button id="again-btn" hidden>Again</button>
-          <button id="good-btn" hidden>Got it</button>
+      <header class="view-head">
+        <h1>Review</h1>
+      </header>
+
+      <div id="review-setup">
+        <div class="segmented" id="review-mode" role="radiogroup" aria-label="Review direction">
+          <button type="button" data-mode="audio" class="on">Listen</button>
+          <button type="button" data-mode="text">Read</button>
+          <button type="button" data-mode="english">Recall</button>
         </div>
-        <p id="review-progress"></p>
+        <p id="mode-hint" class="muted center"></p>
+        <label class="field">Language
+          <select id="review-language"><option value="">All languages</option></select>
+        </label>
+        <button id="start-review" class="btn primary block">Start</button>
+        <p id="review-empty" class="muted center" hidden></p>
       </div>
-      <p id="review-empty" hidden>Nothing to review. Add some cards first.</p>
+
+      <div id="review-session" hidden>
+        <div class="progress"><div id="progress-bar"></div></div>
+        <div class="flashcard">
+          <div id="review-prompt"></div>
+          <div id="review-answer" hidden></div>
+        </div>
+        <div class="row review-actions">
+          <button id="reveal-btn" class="btn primary block">Show answer</button>
+          <button id="again-btn" class="btn grow" hidden>Again</button>
+          <button id="good-btn" class="btn primary grow" hidden>Got it</button>
+        </div>
+        <button id="end-review" class="link center-block">End session</button>
+      </div>
     </section>
   </main>
+
+  <nav class="tabbar">
+    <button data-view="list" class="active">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="14" height="14" rx="2"/><path d="M7 3h12a2 2 0 0 1 2 2v12"/></svg>
+      Deck
+    </button>
+    <button data-view="add">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>
+      Add
+    </button>
+    <button data-view="review">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3"/><path d="M18 3v4h-4M6 21v-4h4"/></svg>
+      Review
+    </button>
+  </nav>
+
+  <div id="toast" role="status" hidden></div>
 
   <script src="app.js" type="module"></script>
 </body>

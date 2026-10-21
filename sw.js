@@ -1,11 +1,12 @@
 // Service worker: network-first for the app's own files, falling back to the
 // cache so the app opens offline. Card data lives in IndexedDB, not here.
 
-const CACHE = 'audio-flashcards-v1';
+const CACHE = 'audio-flashcards-v2';
 const SHELL = [
   './',
   'index.html',
   'app.js',
+  'audio.js',
   'styles.css',
   'manifest.webmanifest',
   'icons/icon-180.png',
