@@ -24,6 +24,9 @@ body {
   color: var(--fg);
 }
 header, main { max-width: 720px; margin: 0 auto; padding: 16px; }
+/* Keep content clear of the notch and home indicator when installed. */
+header { padding-top: max(16px, env(safe-area-inset-top)); }
+main { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
 header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 h1 { font-size: 1.4rem; margin: 0; }
 nav { display: flex; gap: 4px; }

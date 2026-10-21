@@ -316,3 +316,12 @@ $('#again-btn').addEventListener('click', () => {
 $('#good-btn').addEventListener('click', showNext);
 
 refreshLanguages();
+
+// ---------- offline / install ----------
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js');
+}
+
+// Ask the browser not to evict our data under storage pressure.
+navigator.storage?.persist?.();

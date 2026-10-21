@@ -17,7 +17,16 @@ Works for any language: type a language name per card (Cantonese, Mauritian Creo
 - "Again" puts a card back into the current session; "Got it" moves on
 - Export / import the whole deck (audio included) as a JSON file for backup or moving between devices
 
-All data is stored locally in your browser (IndexedDB). There is no server or account.
+All data is stored locally on your device (IndexedDB). There is no server or account. Export regularly to keep a backup.
+
+## Installing on your phone
+
+It's a PWA: install it and it opens full-screen like an app and works offline.
+
+- **iPhone (Safari):** open the site, tap Share → **Add to Home Screen**.
+- **Android (Chrome):** open the site, tap ⋮ → **Install app**.
+
+On iPhone, install it rather than using it in a Safari tab. Safari can clear a website's data after about 7 days of not visiting, but installed apps are exempt.
 
 ## Running
 
@@ -28,7 +37,9 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Recording needs `localhost` or HTTPS. It can be hosted as-is on GitHub Pages.
+Recording and offline mode need `localhost` or HTTPS. Pushes to `main` deploy to GitHub Pages via `.github/workflows/pages.yml`.
+
+When you change the app's files, bump `CACHE` in `sw.js` so old cached copies are cleared.
 
 ## Ideas for later
 
