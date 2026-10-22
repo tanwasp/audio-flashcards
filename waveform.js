@@ -2,7 +2,7 @@
 // meter while recording, and trim handles to crop the clip.
 
 import { decodeMono, peaks, crop } from './audio.js';
-import { haptic } from './feedback.js';
+import { haptic, audioCtx } from './feedback.js';
 
 const BAR = 3;
 const GAP = 2;
@@ -165,11 +165,12 @@ export function createWaveEditor(root, { onTrim }) {
 
   function meter(stream) {
     const mc = $('#level-meter');
-    const AC = window.AudioContext || window.webkitAudioContext;
-    const actx = new AC();
+    const actx = audioCtx();
+    if (!actx) return () => {};
     const an = actx.createAnalyser();
     an.fftSize = 1024;
-    actx.createMediaStreamSource(stream).connect(an);
+    const src = actx.createMediaStreamSource(stream);
+    src.connect(an);
     const buf = new Float32Array(an.fftSize);
     const history = [];
     let frame = 0;
@@ -188,8 +189,18 @@ export function createWaveEditor(root, { onTrim }) {
       id = requestAnimationFrame(loop);
     };
     loop();
-    return () => { cancelAnimationFrame(id); actx.close(); };
+    return () => { cancelAnimationFrame(id); src.disconnect(); };
   }
+
+  // Duration from the audio element, for clips the browser can play but not decode.
+  const elementDuration = () => new Promise((resolve) => {
+    const done = () => resolve(Number.isFinite(audio.duration) ? audio.duration : 0);
+    if (audio.readyState >= 1) done();
+    else {
+      audio.addEventListener('loadedmetadata', done, { once: true });
+      audio.addEventListener('error', done, { once: true });
+    }
+  });
 
   return {
     meter,
@@ -208,15 +219,20 @@ export function createWaveEditor(root, { onTrim }) {
       }
       url = URL.createObjectURL(blob);
       audio.src = url;
+      let ok = true;
       try {
         decoded = await decodeMono(blob);
       } catch {
-        // Can't decode it here (rare formats); still playable, just no waveform or trim.
-        decoded = { samples: new Float32Array(64).fill(0.5), rate: 64 };
-        root.classList.add('no-trim');
+        ok = false;
       }
       if (blob !== newBlob) return; // replaced while decoding
-      root.classList.toggle('no-trim', decoded.rate === 64);
+      // Some browsers decode only the start of their own recordings. If the decoded clip
+      // is much shorter than what plays, show a plain bar and turn off trimming.
+      const playable = await elementDuration();
+      if (ok && playable > 0.5 && decoded.samples.length / decoded.rate < playable * 0.6) ok = false;
+      if (blob !== newBlob) return;
+      if (!ok) decoded = { samples: new Float32Array(64).fill(0.3), rate: 64 / (playable || 1) };
+      root.classList.toggle('no-trim', !ok);
       duration = decoded.samples.length / decoded.rate;
       levels = new Float32Array(0);
       $('#wave-time').textContent = fmt(duration);

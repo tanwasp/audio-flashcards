@@ -57,8 +57,10 @@ export function haptic(kind = 'tap') {
 // ---------- sounds ----------
 // Synthesized, so there are no files to load and they work offline.
 
+// One AudioContext for the whole app (sounds and the recording level meter).
+// iPhones can cut off a live recording when a new one is created mid-capture.
 let ctx = null;
-function audioCtx() {
+export function audioCtx() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return null;
@@ -89,8 +91,6 @@ const SOUNDS = {
   pop: [{ freq: 420, to: 920, dur: 0.09, gain: 0.1 }],
   saved: [{ freq: 523, dur: 0.09, type: 'triangle' }, { freq: 659, at: 0.07, dur: 0.09, type: 'triangle' }, { freq: 1047, at: 0.14, dur: 0.2, type: 'triangle' }],
   goal: [523, 659, 784, 1047, 1319].map((f, i) => ({ freq: f, at: i * 0.08, dur: 0.22, type: 'triangle', gain: 0.07 })),
-  recStart: [{ freq: 880, dur: 0.07, gain: 0.06 }],
-  recStop: [{ freq: 660, dur: 0.07, gain: 0.06 }],
 };
 
 export function sound(name) {

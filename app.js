@@ -1,8 +1,8 @@
 // Audio Flashcards: flashcards with audio, stored locally in IndexedDB.
 
-import { cleanAudio } from './audio.js';
+import { cleanAudio, decodeMono } from './audio.js';
 import { createWaveEditor } from './waveform.js';
-import { haptic, sound, mascot, confirmSheet, feedbackSettings } from './feedback.js';
+import { haptic, sound, mascot, confirmSheet, feedbackSettings, audioCtx } from './feedback.js';
 import { dayKey, addDays, daysBetween, isDue, isNew, schedule, formatInterval } from './srs.js';
 import { XP, BADGES, emptyDay, summarize, earnedBadges } from './game.js';
 
@@ -355,8 +355,11 @@ const editor = createWaveEditor(audioBox, {
 
 const setAudioState = (state) => (audioBox.dataset.state = state);
 
-async function setRawAudio(blob, { saveDraft = true } = {}) {
+let recordedSeconds = 0; // how long the last recording ran, to sanity-check processing
+
+async function setRawAudio(blob, { saveDraft = true, seconds = 0 } = {}) {
   rawAudio = blob;
+  recordedSeconds = seconds;
   if (saveDraft && !form.cardId.value) setDraftAudio(blob);
   await applyCleanup();
 }
@@ -367,12 +370,16 @@ async function applyCleanup() {
   if (rawAudio && $('#clean-audio').checked) {
     setAudioState('processing');
     try {
+      // Clean-up decodes the clip first. Some phones decode only the first moment of
+      // their own recordings; if so, keep the original rather than a near-empty clip.
+      const { samples, rate } = await decodeMono(rawAudio);
+      if (recordedSeconds > 1 && samples.length / rate < recordedSeconds * 0.5) throw new Error('short decode');
       const cleaned = await cleanAudio(rawAudio);
       if (job !== audioJob) return;
       pendingAudio = cleaned;
     } catch {
       if (job !== audioJob) return;
-      toast("Couldn't clean this file; keeping the original");
+      toast("Couldn't clean this recording; keeping the original");
     }
   }
   await showAudio(pendingAudio);
@@ -412,13 +419,16 @@ async function toggleRecording() {
     if (recorder.state === 'recording') recorder.stop();
     return;
   }
+  // Set up the one shared audio context now, inside the tap and before the mic opens.
+  audioCtx();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
     });
     const chunks = [];
     recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    let started = 0;
     recorder.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
       clearInterval(recordTimer);
@@ -426,21 +436,19 @@ async function toggleRecording() {
       btn.classList.remove('recording');
       btn.setAttribute('aria-label', 'Record');
       haptic('heavy');
-      sound('recStop');
-      setRawAudio(new Blob(chunks, { type: recorder.mimeType }));
+      const seconds = (Date.now() - started) / 1000;
+      setRawAudio(new Blob(chunks, { type: recorder.mimeType }), { seconds });
       recorder = null;
     };
     player.pause();
     editor.pause();
+    recorder.start();
+    started = Date.now();
     haptic('heavy');
-    sound('recStart');
-    // Start after the blip so it isn't recorded.
-    setTimeout(() => recorder?.start(), 120);
     btn.classList.add('recording');
     btn.setAttribute('aria-label', 'Stop recording');
     setAudioState('recording');
     stopMeter = editor.meter(stream);
-    const started = Date.now();
     $('#record-status').textContent = 'Recording… 0:00';
     recordTimer = setInterval(() => {
       const sec = Math.floor((Date.now() - started) / 1000);
