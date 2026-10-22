@@ -584,7 +584,6 @@ h1 { font-weight: 900; }
 .audio-box[data-state="recording"] .rec-area { display: flex; }
 .audio-box[data-state="ready"] .wave-area,
 .audio-box[data-state="trimming"] .wave-area { display: grid; }
-.audio-box[data-state="processing"] .processing { display: grid; }
 
 .rec-area { align-items: center; gap: 16px; }
 .rec-side { flex: 1; min-width: 0; display: grid; gap: 4px; justify-items: start; }
@@ -665,18 +664,7 @@ h1 { font-weight: 900; }
 }
 .chip-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chip-btn.danger { color: var(--danger); margin-left: auto; }
-.chip-btn.toggle:has(input:checked) { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 
-.processing { justify-items: center; gap: 10px; }
-.shimmer {
-  width: 100%;
-  height: 40px;
-  border-radius: 10px;
-  background: linear-gradient(90deg, var(--border) 25%, var(--bg) 50%, var(--border) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.1s linear infinite;
-}
-@keyframes shimmer { to { background-position: -200% 0; } }
 
 .error.shake { animation: shake 0.4s; }
 @keyframes shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }

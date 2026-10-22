@@ -13,8 +13,7 @@ You need at least the romanization or the written form. Works for any language: 
 ## Features
 
 - **Fast entry:** after saving, the form stays open with the language filled in, ready for the next card. The card you're writing (including its recording) is kept as a draft, so it survives the app being closed.
-- **Audio editor:** see the waveform, tap anywhere to play from there, and trim the clip by dragging two handles. A live level meter shows while recording.
-- **Audio clean-up** (on by default, done on-device): cuts low rumble, quiets background hiss between words, trims silence at the start and end, and evens out volume. Recording also uses the browser's built-in noise suppression.
+- **Audio editor:** see the waveform, tap anywhere to play from there, and trim the clip by dragging two handles. Trimming keeps the original recording and just remembers which part to play, so it can be changed later. A live level meter shows while recording.
 - **Spaced repetition:** a simplified SM-2. Answer *Again*, *Good* or *Easy*; each button shows when the card will come back. The Today screen shows what's due plus a daily allowance of new cards. *Practice all* runs through everything without changing the schedule.
 - **Review** in three directions: *Listen* (audio → meaning), *Read* (romanization → meaning), *Recall* (English → say it). "Again" puts a card back into the session.
 - **Streaks and goals:** hit your daily review goal to extend your streak. XP and levels, badges, an in-session combo counter, and a 17-week activity heatmap on the Progress screen.
@@ -49,7 +48,6 @@ When you change the app's files, bump `CACHE` in `sw.js` so old cached copies ar
 
 ## Ideas for later
 
-- Stronger noise removal (e.g. RNNoise via WebAssembly) for noisy recordings
 - Bulk import from CSV + a folder of audio files
 - Accounts and sync across devices (e.g. Supabase auth + storage), which would also allow real push reminders on iPhone
 - Auto-romanization (e.g. Jyutping via a dictionary like CC-Canto)

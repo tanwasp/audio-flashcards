@@ -1,7 +1,6 @@
 // Audio Flashcards: flashcards with audio, stored locally in IndexedDB.
 
-import { cleanAudio, samplesToWav } from './audio.js';
-import { createWaveEditor } from './waveform.js';
+import { createWaveEditor, playClip, resamplePeaks } from './waveform.js';
 import { haptic, sound, mascot, confirmSheet, feedbackSettings, audioCtx } from './feedback.js';
 import { dayKey, addDays, daysBetween, isDue, isNew, schedule, formatInterval } from './srs.js';
 import { XP, BADGES, emptyDay, summarize, earnedBadges } from './game.js';
@@ -146,24 +145,25 @@ function resetPlayingBtn() {
 player.addEventListener('ended', resetPlayingBtn);
 player.addEventListener('pause', resetPlayingBtn);
 
-function play(blob, btn) {
+// Play a card's audio, only the trimmed part if it has one.
+function play(card, btn) {
   if (playingBtn === btn) {
     player.pause();
     return;
   }
   player.pause();
   if (player.src) URL.revokeObjectURL(player.src);
-  player.src = URL.createObjectURL(blob);
-  player.play().then(() => {
+  player.src = URL.createObjectURL(card.audio);
+  playClip(player, card.audioTrim?.start ?? 0, card.audioTrim?.end ?? null).then(() => {
     playingBtn = btn;
     btn.innerHTML = STOP_ICON;
     btn.classList.add('playing');
   }).catch(() => {});
 }
 
-function playButton(blob, big = false) {
+function playButton(card, big = false) {
   const btn = el('button', { type: 'button', class: big ? 'play big' : 'play', 'aria-label': 'Play', html: PLAY_ICON });
-  if (blob) btn.addEventListener('click', (e) => { e.stopPropagation(); haptic('tap'); play(blob, btn); });
+  if (card.audio) btn.addEventListener('click', (e) => { e.stopPropagation(); haptic('tap'); play(card, btn); });
   else btn.disabled = true;
   return btn;
 }
@@ -339,155 +339,95 @@ const form = $('#card-form');
 const audioBox = $('#audio-box');
 const TEXT_FIELDS = ['romanization', 'english', 'native', 'language', 'notes'];
 
-let rawAudio = null; // what was recorded, uploaded or trimmed
-let pendingAudio = null; // what will be saved: rawAudio, or its cleaned-up version
-let audioJob = 0;
+// The card's audio while it's being written: { blob, peaks, duration, trim } or null.
+// Trim is just a start/end time; the recording itself is never re-encoded.
+let clip = null;
 
 const editor = createWaveEditor(audioBox, {
-  async onTrim(cut) {
-    // The trimmed clip is already cleaned (if clean-up was on), so don't clean it again.
-    rawAudio = pendingAudio = cut;
-    if (!form.cardId.value) setDraftAudio(cut);
-    await showAudio(cut);
-    toast('Trimmed ✂️');
+  onTrim(trim) {
+    saveDraftClip();
+    toast(trim ? 'Trimmed ✂️' : 'Using the whole clip');
   },
 });
 
 const setAudioState = (state) => (audioBox.dataset.state = state);
 
-async function setRawAudio(blob, { saveDraft = true } = {}) {
-  rawAudio = blob;
-  if (saveDraft && !form.cardId.value) setDraftAudio(blob);
-  await applyCleanup();
+// Remember an unsaved recording (and its trim) so it survives the app being closed.
+function saveDraftClip() {
+  if (form.cardId.value) return;
+  setDraftAudio(clip?.blob ?? null);
+  prefs.set('draftClip', clip ? { peaks: clip.peaks, duration: clip.duration, trim: clip.trim } : null);
 }
 
-async function applyCleanup() {
-  const job = ++audioJob;
-  pendingAudio = rawAudio;
-  if (rawAudio && $('#clean-audio').checked) {
-    setAudioState('processing');
-    try {
-      const cleaned = await cleanAudio(rawAudio);
-      if (job !== audioJob) return;
-      pendingAudio = cleaned;
-    } catch {
-      if (job !== audioJob) return;
-      toast("Couldn't clean this recording; keeping the original");
-    }
-  }
-  await showAudio(pendingAudio);
-}
-
-async function showAudio(blob) {
-  setAudioState(blob ? 'ready' : 'empty');
+async function setClip(next, { saveDraft = true } = {}) {
+  clip = next;
+  setAudioState(clip ? 'ready' : 'empty');
   $('#record-status').textContent = 'Tap to record';
-  await editor.show(blob ?? null);
+  await editor.show(clip);
+  if (saveDraft) saveDraftClip();
 }
 
 form.audio.addEventListener('change', () => {
   const file = form.audio.files[0];
-  if (file) setRawAudio(file);
+  if (file) setClip({ blob: file, trim: null });
   form.audio.value = '';
-});
-
-$('#clean-audio').addEventListener('change', () => {
-  haptic('select');
-  prefs.set('cleanAudio', $('#clean-audio').checked);
-  if (rawAudio) applyCleanup();
 });
 
 $('#remove-audio').addEventListener('click', async () => {
   if (!(await confirmSheet({ title: 'Remove this recording?', confirm: 'Remove', danger: true }))) return;
-  setRawAudio(null);
-  if (form.cardId.value) editingHadAudio = false;
+  setClip(null);
 });
 
-let recording = null; // { stop } while the mic is open
+let recorder = null;
 let recordTimer = null;
 let stopMeter = null;
-let workletReady = null;
-
-// Record raw samples from the mic through the shared audio context, not MediaRecorder:
-// Safari can't decode its own MediaRecorder files past the first fragment, which made
-// iPhone recordings come out a fraction of a second long after clean-up.
-async function startCapture(stream) {
-  const ctx = audioCtx();
-  workletReady ??= ctx.audioWorklet.addModule('capture-worklet.js');
-  await workletReady;
-  await ctx.resume();
-  const src = ctx.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(ctx, 'capture');
-  const mute = ctx.createGain();
-  mute.gain.value = 0; // the graph has to reach the speakers to run, silently
-  const chunks = [];
-  let finished;
-  const done = new Promise((r) => (finished = r));
-  node.port.onmessage = (e) => (e.data === 'done' ? finished() : chunks.push(e.data));
-  src.connect(node).connect(mute).connect(ctx.destination);
-  return {
-    src,
-    async stop() {
-      node.port.postMessage('flush');
-      await Promise.race([done, new Promise((r) => setTimeout(r, 500))]);
-      src.disconnect();
-      node.disconnect();
-      mute.disconnect();
-      stream.getTracks().forEach((t) => t.stop());
-      const all = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
-      let at = 0;
-      for (const c of chunks) { all.set(c, at); at += c.length; }
-      return samplesToWav(all, ctx.sampleRate);
-    },
-  };
-}
 
 async function toggleRecording() {
   const btn = $('#record-btn');
-  if (recording) {
-    const rec = recording;
-    recording = null;
-    clearInterval(recordTimer);
-    stopMeter?.();
-    btn.classList.remove('recording');
-    btn.setAttribute('aria-label', 'Record');
-    haptic('heavy');
-    setAudioState('processing');
-    setRawAudio(await rec.stop());
+  if (recorder) {
+    if (recorder.state === 'recording') recorder.stop();
     return;
   }
-  if (btn.disabled) return;
-  // Create the shared audio context inside the tap, before the mic opens (iPhones need both).
-  if (!audioCtx()?.audioWorklet) {
-    toast('Recording isn\u2019t supported in this browser');
-    return;
-  }
-  btn.disabled = true; // until the mic is open; stops double taps
-  let stream;
+  audioCtx(); // set up audio inside the tap, before the mic opens (iPhone needs this)
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
     });
+    const chunks = [];
+    let started = Date.now();
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    recorder.onstart = () => (started = Date.now());
+    recorder.onstop = () => {
+      const duration = (Date.now() - started) / 1000;
+      stream.getTracks().forEach((t) => t.stop());
+      clearInterval(recordTimer);
+      const levels = stopMeter?.() ?? [];
+      btn.classList.remove('recording');
+      btn.setAttribute('aria-label', 'Record');
+      haptic('heavy');
+      const type = recorder.mimeType;
+      recorder = null;
+      setClip({ blob: new Blob(chunks, { type }), peaks: resamplePeaks(levels), duration, trim: null });
+    };
     player.pause();
     editor.pause();
-    recording = await startCapture(stream);
+    recorder.start();
     haptic('heavy');
     btn.classList.add('recording');
     btn.setAttribute('aria-label', 'Stop recording');
     setAudioState('recording');
-    stopMeter = editor.meter(recording.src);
-    const started = Date.now();
+    stopMeter = editor.meter(stream);
+    const t0 = Date.now();
     $('#record-status').textContent = 'Recording… 0:00';
     recordTimer = setInterval(() => {
-      const sec = Math.floor((Date.now() - started) / 1000);
+      const sec = Math.floor((Date.now() - t0) / 1000);
       $('#record-status').textContent = `Recording… ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
     }, 250);
   } catch (err) {
-    stream?.getTracks().forEach((t) => t.stop());
-    recording = null;
+    recorder = null;
     haptic('error');
     toast('Microphone not available');
-  } finally {
-    btn.disabled = false;
   }
 }
 $('#record-btn').addEventListener('click', toggleRecording);
@@ -503,10 +443,9 @@ form.addEventListener('input', saveDraft);
 
 function clearDraft() {
   prefs.set('draft', null);
+  prefs.set('draftClip', null);
   setDraftAudio(null);
 }
-
-let editingHadAudio = false;
 
 function startNewCard() {
   form.reset();
@@ -520,9 +459,8 @@ form.addEventListener('reset', () => {
     $('#form-title').textContent = 'New card';
     $('#delete-btn').hidden = true;
     $('#form-error').hidden = true;
-    editingHadAudio = false;
     clearDraft();
-    setRawAudio(null, { saveDraft: false });
+    setClip(null, { saveDraft: false });
   });
 });
 
@@ -547,8 +485,16 @@ form.addEventListener('submit', async (e) => {
   const editing = !!form.cardId.value;
   const id = form.cardId.value || crypto.randomUUID();
   const existing = editing ? await getCard(id) : null;
-  const audio = rawAudio ? pendingAudio : editingHadAudio ? existing?.audio ?? null : null;
-  await putCard({ ...existing, ...v, id, audio, createdAt: existing?.createdAt ?? Date.now() });
+  await putCard({
+    ...existing,
+    ...v,
+    id,
+    audio: clip?.blob ?? null,
+    audioTrim: clip?.trim ?? null,
+    audioPeaks: clip?.peaks ?? null,
+    audioDuration: clip?.duration ?? null,
+    createdAt: existing?.createdAt ?? Date.now(),
+  });
   prefs.set('lastLanguage', v.language);
   await refreshLanguages();
 
@@ -591,10 +537,8 @@ async function editCard(id) {
   $('#delete-btn').hidden = false;
   $('#form-error').hidden = true;
   // Keep the saved audio unless a new one is recorded or it's removed.
-  rawAudio = pendingAudio = null;
-  editingHadAudio = !!c.audio;
   showView('add');
-  showAudio(c.audio ?? null);
+  setClip(c.audio ? { blob: c.audio, peaks: c.audioPeaks, duration: c.audioDuration, trim: c.audioTrim } : null, { saveDraft: false });
 }
 
 async function restoreDraft() {
@@ -602,7 +546,7 @@ async function restoreDraft() {
   form.language.value = prefs.get('lastLanguage') ?? '';
   if (draft) for (const k of TEXT_FIELDS) if (draft[k]) form[k].value = draft[k];
   const audio = await getDraftAudio();
-  if (audio) await setRawAudio(audio, { saveDraft: false });
+  if (audio) await setClip({ blob: audio, trim: null, ...prefs.get('draftClip') }, { saveDraft: false });
 }
 
 const SAVED_LINES = ['Into the deck it goes!', 'Nice one!', 'Your deck is growing 🌱', 'Got it, saved!', 'Another one for the collection'];
@@ -672,7 +616,7 @@ async function renderList() {
   $('#card-list').replaceChildren(
     ...cards.map((c) =>
       el('li', { class: 'card-row' },
-        playButton(c.audio),
+        playButton(c),
         el('div', { class: 'text', onclick: () => { haptic('tap'); editCard(c.id); } },
           el('div', { class: 'primary-text' }, primaryText(c)),
           el('div', { class: 'secondary' }, [c.english, c.romanization && c.native].filter(Boolean).join(' · ')),
@@ -906,9 +850,9 @@ $('#review-language').addEventListener('change', renderToday);
 
 function promptFor(card) {
   if (mode === 'audio') {
-    const btn = playButton(card.audio, true);
+    const btn = playButton(card, true);
     // Started from a tap, so autoplay is allowed.
-    queueMicrotask(() => play(card.audio, btn));
+    queueMicrotask(() => play(card, btn));
     return [btn];
   }
   if (mode === 'text') {
@@ -925,7 +869,7 @@ function answerFor(card) {
     mode !== 'text' ? el('div', { class: 'big-text' }, primaryText(card)) : null,
     mode !== 'text' && card.romanization && card.native ? el('div', { class: 'native' }, card.native) : null,
     mode !== 'english' ? el('div', { class: 'meaning' }, card.english) : null,
-    mode !== 'audio' && card.audio ? playButton(card.audio) : null,
+    mode !== 'audio' && card.audio ? playButton(card) : null,
     card.notes ? el('div', { class: 'note' }, card.notes) : null,
   ].filter(Boolean);
 }
@@ -1144,7 +1088,6 @@ document.addEventListener('keydown', (e) => {
 
 // ---------- start up ----------
 
-$('#clean-audio').checked = prefs.get('cleanAudio') ?? true;
 fillMascots();
 setMode(mode);
 (async () => {
