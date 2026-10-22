@@ -2,7 +2,7 @@
 // meter while recording, and trim handles to crop the clip.
 
 import { decodeMono, peaks, crop } from './audio.js';
-import { haptic, audioCtx } from './feedback.js';
+import { haptic } from './feedback.js';
 
 const BAR = 3;
 const GAP = 2;
@@ -163,13 +163,11 @@ export function createWaveEditor(root, { onTrim }) {
 
   // ---------- live level meter while recording ----------
 
-  function meter(stream) {
+  // `src` is the microphone's source node in the shared audio context.
+  function meter(src) {
     const mc = $('#level-meter');
-    const actx = audioCtx();
-    if (!actx) return () => {};
-    const an = actx.createAnalyser();
+    const an = src.context.createAnalyser();
     an.fftSize = 1024;
-    const src = actx.createMediaStreamSource(stream);
     src.connect(an);
     const buf = new Float32Array(an.fftSize);
     const history = [];
@@ -189,7 +187,7 @@ export function createWaveEditor(root, { onTrim }) {
       id = requestAnimationFrame(loop);
     };
     loop();
-    return () => { cancelAnimationFrame(id); src.disconnect(); };
+    return () => { cancelAnimationFrame(id); an.disconnect(); };
   }
 
   // Duration from the audio element, for clips the browser can play but not decode.

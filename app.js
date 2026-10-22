@@ -1,6 +1,6 @@
 // Audio Flashcards: flashcards with audio, stored locally in IndexedDB.
 
-import { cleanAudio, decodeMono } from './audio.js';
+import { cleanAudio, samplesToWav } from './audio.js';
 import { createWaveEditor } from './waveform.js';
 import { haptic, sound, mascot, confirmSheet, feedbackSettings, audioCtx } from './feedback.js';
 import { dayKey, addDays, daysBetween, isDue, isNew, schedule, formatInterval } from './srs.js';
@@ -355,11 +355,8 @@ const editor = createWaveEditor(audioBox, {
 
 const setAudioState = (state) => (audioBox.dataset.state = state);
 
-let recordedSeconds = 0; // how long the last recording ran, to sanity-check processing
-
-async function setRawAudio(blob, { saveDraft = true, seconds = 0 } = {}) {
+async function setRawAudio(blob, { saveDraft = true } = {}) {
   rawAudio = blob;
-  recordedSeconds = seconds;
   if (saveDraft && !form.cardId.value) setDraftAudio(blob);
   await applyCleanup();
 }
@@ -370,10 +367,6 @@ async function applyCleanup() {
   if (rawAudio && $('#clean-audio').checked) {
     setAudioState('processing');
     try {
-      // Clean-up decodes the clip first. Some phones decode only the first moment of
-      // their own recordings; if so, keep the original rather than a near-empty clip.
-      const { samples, rate } = await decodeMono(rawAudio);
-      if (recordedSeconds > 1 && samples.length / rate < recordedSeconds * 0.5) throw new Error('short decode');
       const cleaned = await cleanAudio(rawAudio);
       if (job !== audioJob) return;
       pendingAudio = cleaned;
@@ -409,55 +402,92 @@ $('#remove-audio').addEventListener('click', async () => {
   if (form.cardId.value) editingHadAudio = false;
 });
 
-let recorder = null;
+let recording = null; // { stop } while the mic is open
 let recordTimer = null;
 let stopMeter = null;
+let workletReady = null;
+
+// Record raw samples from the mic through the shared audio context, not MediaRecorder:
+// Safari can't decode its own MediaRecorder files past the first fragment, which made
+// iPhone recordings come out a fraction of a second long after clean-up.
+async function startCapture(stream) {
+  const ctx = audioCtx();
+  workletReady ??= ctx.audioWorklet.addModule('capture-worklet.js');
+  await workletReady;
+  await ctx.resume();
+  const src = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, 'capture');
+  const mute = ctx.createGain();
+  mute.gain.value = 0; // the graph has to reach the speakers to run, silently
+  const chunks = [];
+  let finished;
+  const done = new Promise((r) => (finished = r));
+  node.port.onmessage = (e) => (e.data === 'done' ? finished() : chunks.push(e.data));
+  src.connect(node).connect(mute).connect(ctx.destination);
+  return {
+    src,
+    async stop() {
+      node.port.postMessage('flush');
+      await Promise.race([done, new Promise((r) => setTimeout(r, 500))]);
+      src.disconnect();
+      node.disconnect();
+      mute.disconnect();
+      stream.getTracks().forEach((t) => t.stop());
+      const all = new Float32Array(chunks.reduce((n, c) => n + c.length, 0));
+      let at = 0;
+      for (const c of chunks) { all.set(c, at); at += c.length; }
+      return samplesToWav(all, ctx.sampleRate);
+    },
+  };
+}
 
 async function toggleRecording() {
   const btn = $('#record-btn');
-  if (recorder) {
-    if (recorder.state === 'recording') recorder.stop();
+  if (recording) {
+    const rec = recording;
+    recording = null;
+    clearInterval(recordTimer);
+    stopMeter?.();
+    btn.classList.remove('recording');
+    btn.setAttribute('aria-label', 'Record');
+    haptic('heavy');
+    setAudioState('processing');
+    setRawAudio(await rec.stop());
     return;
   }
-  // Set up the one shared audio context now, inside the tap and before the mic opens.
-  audioCtx();
+  if (btn.disabled) return;
+  // Create the shared audio context inside the tap, before the mic opens (iPhones need both).
+  if (!audioCtx()?.audioWorklet) {
+    toast('Recording isn\u2019t supported in this browser');
+    return;
+  }
+  btn.disabled = true; // until the mic is open; stops double taps
+  let stream;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true },
     });
-    const chunks = [];
-    recorder = new MediaRecorder(stream);
-    recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    let started = 0;
-    recorder.onstop = () => {
-      stream.getTracks().forEach((t) => t.stop());
-      clearInterval(recordTimer);
-      stopMeter?.();
-      btn.classList.remove('recording');
-      btn.setAttribute('aria-label', 'Record');
-      haptic('heavy');
-      const seconds = (Date.now() - started) / 1000;
-      setRawAudio(new Blob(chunks, { type: recorder.mimeType }), { seconds });
-      recorder = null;
-    };
     player.pause();
     editor.pause();
-    recorder.start();
-    started = Date.now();
+    recording = await startCapture(stream);
     haptic('heavy');
     btn.classList.add('recording');
     btn.setAttribute('aria-label', 'Stop recording');
     setAudioState('recording');
-    stopMeter = editor.meter(stream);
+    stopMeter = editor.meter(recording.src);
+    const started = Date.now();
     $('#record-status').textContent = 'Recording… 0:00';
     recordTimer = setInterval(() => {
       const sec = Math.floor((Date.now() - started) / 1000);
       $('#record-status').textContent = `Recording… ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
     }, 250);
   } catch (err) {
-    recorder = null;
+    stream?.getTracks().forEach((t) => t.stop());
+    recording = null;
     haptic('error');
     toast('Microphone not available');
+  } finally {
+    btn.disabled = false;
   }
 }
 $('#record-btn').addEventListener('click', toggleRecording);

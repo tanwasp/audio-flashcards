@@ -28,6 +28,19 @@ export async function decodeMono(blob) {
   return { samples: (await ctx.startRendering()).getChannelData(0), rate: SAMPLE_RATE };
 }
 
+// Raw samples (e.g. from the microphone) to a WAV at SAMPLE_RATE.
+export async function samplesToWav(samples, rate) {
+  if (!samples.length) return encodeWav(samples, SAMPLE_RATE);
+  const ctx = new OfflineAudioContext(1, Math.ceil((samples.length / rate) * SAMPLE_RATE), SAMPLE_RATE);
+  const buf = ctx.createBuffer(1, samples.length, rate);
+  buf.copyToChannel(samples, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start();
+  return encodeWav((await ctx.startRendering()).getChannelData(0), SAMPLE_RATE);
+}
+
 // Loudness of `n` equal slices, scaled so the loudest is 1.
 export function peaks(samples, n) {
   const out = new Float32Array(n);
