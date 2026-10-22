@@ -1,6 +1,8 @@
 // Audio Flashcards: flashcards with audio, stored locally in IndexedDB.
 
 import { cleanAudio } from './audio.js';
+import { createWaveEditor } from './waveform.js';
+import { haptic, sound, mascot, confirmSheet, feedbackSettings } from './feedback.js';
 import { dayKey, addDays, daysBetween, isDue, isNew, schedule, formatInterval } from './srs.js';
 import { XP, BADGES, emptyDay, summarize, earnedBadges } from './game.js';
 
@@ -109,15 +111,21 @@ function shuffle(arr) {
   return arr;
 }
 
-const buzz = (ms = 10) => navigator.vibrate?.(ms);
-
 let toastTimer;
 function toast(msg, ms = 1800) {
   const t = $('#toast');
   t.textContent = msg;
   t.hidden = false;
+  t.classList.remove('out');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), ms);
+  toastTimer = setTimeout(() => {
+    t.classList.add('out');
+    toastTimer = setTimeout(() => (t.hidden = true), 200);
+  }, ms);
+}
+
+function fillMascots(root = document) {
+  root.querySelectorAll('.mascot-slot[data-mood]').forEach((m) => (m.innerHTML = mascot(m.dataset.mood)));
 }
 
 // ---------- playback ----------
@@ -155,7 +163,7 @@ function play(blob, btn) {
 
 function playButton(blob, big = false) {
   const btn = el('button', { type: 'button', class: big ? 'play big' : 'play', 'aria-label': 'Play', html: PLAY_ICON });
-  if (blob) btn.addEventListener('click', (e) => { e.stopPropagation(); play(blob, btn); });
+  if (blob) btn.addEventListener('click', (e) => { e.stopPropagation(); haptic('tap'); play(blob, btn); });
   else btn.disabled = true;
   return btn;
 }
@@ -164,7 +172,12 @@ function playButton(blob, big = false) {
 
 function showView(name) {
   player.pause();
-  document.querySelectorAll('.view').forEach((v) => (v.hidden = v.id !== `view-${name}`));
+  editor.pause();
+  document.querySelectorAll('.view').forEach((v) => {
+    const show = v.id === `view-${name}`;
+    if (show && v.hidden) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); }
+    v.hidden = !show;
+  });
   document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   document.body.classList.toggle('in-session', name === 'session');
   window.scrollTo(0, 0);
@@ -175,13 +188,15 @@ function showView(name) {
 
 document.querySelectorAll('.tabbar button').forEach((b) =>
   b.addEventListener('click', () => {
+    if (b.classList.contains('active')) return;
+    haptic('select');
     if (b.dataset.view === 'add' && form.cardId.value) startNewCard();
     showView(b.dataset.view);
   })
 );
 document.addEventListener('click', (e) => {
   const target = e.target.closest('[data-goto]');
-  if (target) showView(target.dataset.goto);
+  if (target) { haptic('tap'); showView(target.dataset.goto); }
 });
 
 // ---------- languages ----------
@@ -204,7 +219,7 @@ async function refreshLanguages() {
       el('button', {
         type: 'button',
         class: l === deckLang ? 'chip on' : 'chip',
-        onclick: () => { deckLang = l; refreshLanguages(); renderList(); },
+        onclick: () => { haptic('select'); deckLang = l; refreshLanguages(); renderList(); },
       }, l || 'All')
     )
   );
@@ -242,7 +257,7 @@ async function checkBadges() {
   await saveProfile();
   fresh.forEach((id, i) => {
     const b = BADGES.find((x) => x.id === id);
-    setTimeout(() => { toast(`${b.icon} Badge unlocked: ${b.name}`, 2600); buzz([20, 40, 20]); }, 600 + i * 2800);
+    setTimeout(() => { toast(`${b.icon} Badge unlocked: ${b.name}`, 2600); haptic('success'); sound('goal'); }, 600 + i * 2800);
   });
 }
 
@@ -308,24 +323,37 @@ async function renderToday() {
   $('#new-count').textContent = fresh.length;
   $('#today-count').textContent = day.reviews;
   const n = due.length + fresh.length;
-  $('#start-review').textContent = n ? `Start review · ${n}` : pool.length ? 'All caught up' : 'No cards with audio yet';
+  $('#start-review').textContent = n ? `Start review · ${n}` : 'No cards with audio yet';
+  $('#start-review').hidden = !n && pool.length > 0;
   $('#start-review').disabled = !n;
+  $('#caught-up').hidden = !(pool.length && !n);
+  $('#start-practice').textContent = n ? 'Practice all cards instead' : 'Practice all cards';
+  $('#start-practice').classList.toggle('btn', !n);
+  $('#start-practice').classList.toggle('link', !!n);
   $('#start-practice').hidden = !pool.length;
 }
 
 // ---------- add / edit ----------
 
 const form = $('#card-form');
-const preview = $('#audio-preview');
+const audioBox = $('#audio-box');
 const TEXT_FIELDS = ['romanization', 'english', 'native', 'language', 'notes'];
 
-let rawAudio = null; // what was recorded or uploaded
+let rawAudio = null; // what was recorded, uploaded or trimmed
 let pendingAudio = null; // what will be saved: rawAudio, or its cleaned-up version
 let audioJob = 0;
 
-function setStatus(text) {
-  $('#record-status').textContent = text;
-}
+const editor = createWaveEditor(audioBox, {
+  async onTrim(cut) {
+    // The trimmed clip is already cleaned (if clean-up was on), so don't clean it again.
+    rawAudio = pendingAudio = cut;
+    if (!form.cardId.value) setDraftAudio(cut);
+    await showAudio(cut);
+    toast('Trimmed ✂️');
+  },
+});
+
+const setAudioState = (state) => (audioBox.dataset.state = state);
 
 async function setRawAudio(blob, { saveDraft = true } = {}) {
   rawAudio = blob;
@@ -337,7 +365,7 @@ async function applyCleanup() {
   const job = ++audioJob;
   pendingAudio = rawAudio;
   if (rawAudio && $('#clean-audio').checked) {
-    setStatus('Cleaning up…');
+    setAudioState('processing');
     try {
       const cleaned = await cleanAudio(rawAudio);
       if (job !== audioJob) return;
@@ -347,16 +375,13 @@ async function applyCleanup() {
       toast("Couldn't clean this file; keeping the original");
     }
   }
-  showAudio(pendingAudio);
+  await showAudio(pendingAudio);
 }
 
-function showAudio(blob) {
-  preview.hidden = !blob;
-  $('#remove-audio').hidden = !blob;
-  if (preview.src) URL.revokeObjectURL(preview.src);
-  if (blob) preview.src = URL.createObjectURL(blob);
-  else preview.removeAttribute('src');
-  setStatus(blob ? '' : 'Tap to record');
+async function showAudio(blob) {
+  setAudioState(blob ? 'ready' : 'empty');
+  $('#record-status').textContent = 'Tap to record';
+  await editor.show(blob ?? null);
 }
 
 form.audio.addEventListener('change', () => {
@@ -366,21 +391,25 @@ form.audio.addEventListener('change', () => {
 });
 
 $('#clean-audio').addEventListener('change', () => {
+  haptic('select');
   prefs.set('cleanAudio', $('#clean-audio').checked);
   if (rawAudio) applyCleanup();
 });
 
-$('#remove-audio').addEventListener('click', () => {
+$('#remove-audio').addEventListener('click', async () => {
+  if (!(await confirmSheet({ title: 'Remove this recording?', confirm: 'Remove', danger: true }))) return;
   setRawAudio(null);
   if (form.cardId.value) editingHadAudio = false;
 });
 
 let recorder = null;
 let recordTimer = null;
-$('#record-btn').addEventListener('click', async () => {
+let stopMeter = null;
+
+async function toggleRecording() {
   const btn = $('#record-btn');
   if (recorder) {
-    recorder.stop();
+    if (recorder.state === 'recording') recorder.stop();
     return;
   }
   try {
@@ -393,25 +422,38 @@ $('#record-btn').addEventListener('click', async () => {
     recorder.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
       clearInterval(recordTimer);
+      stopMeter?.();
       btn.classList.remove('recording');
       btn.setAttribute('aria-label', 'Record');
+      haptic('heavy');
+      sound('recStop');
       setRawAudio(new Blob(chunks, { type: recorder.mimeType }));
       recorder = null;
     };
-    recorder.start();
     player.pause();
+    editor.pause();
+    haptic('heavy');
+    sound('recStart');
+    // Start after the blip so it isn't recorded.
+    setTimeout(() => recorder?.start(), 120);
     btn.classList.add('recording');
     btn.setAttribute('aria-label', 'Stop recording');
+    setAudioState('recording');
+    stopMeter = editor.meter(stream);
     const started = Date.now();
-    setStatus('Recording… 0:00');
+    $('#record-status').textContent = 'Recording… 0:00';
     recordTimer = setInterval(() => {
-      const s = Math.floor((Date.now() - started) / 1000);
-      setStatus(`Recording… ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
+      const sec = Math.floor((Date.now() - started) / 1000);
+      $('#record-status').textContent = `Recording… ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
     }, 250);
   } catch (err) {
+    recorder = null;
+    haptic('error');
     toast('Microphone not available');
   }
-});
+}
+$('#record-btn').addEventListener('click', toggleRecording);
+$('#rerecord-btn').addEventListener('click', toggleRecording);
 
 // Keep the card being written so it survives the app being closed.
 function saveDraft() {
@@ -456,6 +498,10 @@ form.addEventListener('submit', async (e) => {
   if (problem) {
     $('#form-error').textContent = problem;
     $('#form-error').hidden = false;
+    $('#form-error').classList.remove('shake');
+    void $('#form-error').offsetWidth;
+    $('#form-error').classList.add('shake');
+    haptic('error');
     return;
   }
   $('#form-error').hidden = true;
@@ -469,12 +515,13 @@ form.addEventListener('submit', async (e) => {
   await refreshLanguages();
 
   if (editing) {
-    toast('Card updated');
+    haptic('success');
+    toast('Card updated ✓');
     startNewCard();
     showView('list');
   } else {
-    await updateToday((d) => { d.added++; d.xp += XP.added; });
-    toast(`Card saved · +${XP.added} XP`);
+    const { day } = await updateToday((d) => { d.added++; d.xp += XP.added; });
+    celebrateSaved(primaryText(v), day.added, (await getAllCards()).length);
     startNewCard();
     form.romanization.focus();
   }
@@ -483,7 +530,14 @@ form.addEventListener('submit', async (e) => {
 
 $('#delete-btn').addEventListener('click', async () => {
   const id = form.cardId.value;
-  if (!id || !confirm('Delete this card?')) return;
+  if (!id) return;
+  const ok = await confirmSheet({
+    title: 'Delete this card?',
+    body: `“${primaryText(Object.fromEntries(TEXT_FIELDS.map((k) => [k, form[k].value])))}” and its recording will be gone for good.`,
+    confirm: 'Delete card',
+    danger: true,
+  });
+  if (!ok) return;
   await deleteCard(id);
   await refreshLanguages();
   toast('Card deleted');
@@ -501,8 +555,8 @@ async function editCard(id) {
   // Keep the saved audio unless a new one is recorded or it's removed.
   rawAudio = pendingAudio = null;
   editingHadAudio = !!c.audio;
-  showAudio(c.audio ?? null);
   showView('add');
+  showAudio(c.audio ?? null);
 }
 
 async function restoreDraft() {
@@ -512,6 +566,47 @@ async function restoreDraft() {
   const audio = await getDraftAudio();
   if (audio) await setRawAudio(audio, { saveDraft: false });
 }
+
+const SAVED_LINES = ['Into the deck it goes!', 'Nice one!', 'Your deck is growing 🌱', 'Got it, saved!', 'Another one for the collection'];
+const MILESTONES = [10, 25, 50, 100, 250, 500, 1000];
+let savedTimer;
+
+function celebrateSaved(text, addedToday, total) {
+  const milestone = MILESTONES.includes(total);
+  const pop = $('#saved-pop');
+  $('#saved-mascot').innerHTML = mascot(milestone ? 'star' : 'excited');
+  $('#saved-title').textContent = milestone ? `${total} cards! 🎉` : `“${text}” saved`;
+  $('#saved-sub').textContent = milestone
+    ? 'What a milestone. Keep going!'
+    : addedToday > 1
+      ? `${SAVED_LINES[addedToday % SAVED_LINES.length]} · ${addedToday} added today`
+      : SAVED_LINES[0];
+  $('#saved-xp').textContent = `+${XP.added} XP`;
+  pop.hidden = false;
+  pop.classList.remove('out', 'in');
+  void pop.offsetWidth;
+  pop.classList.add('in');
+  haptic('success');
+  sound(milestone ? 'goal' : 'saved');
+  if (milestone) celebrate();
+
+  // The Deck tab bounces with a +1, like the card just landed there.
+  const tab = $('.tabbar [data-view=list]');
+  tab.classList.remove('bump');
+  void tab.offsetWidth;
+  tab.classList.add('bump');
+  setTimeout(() => tab.classList.remove('bump'), 1000);
+
+  clearTimeout(savedTimer);
+  savedTimer = setTimeout(hideSaved, milestone ? 3200 : 2200);
+}
+
+function hideSaved() {
+  const pop = $('#saved-pop');
+  pop.classList.add('out');
+  setTimeout(() => { pop.hidden = true; $('#confetti').replaceChildren(); }, 250);
+}
+$('#saved-pop').addEventListener('click', hideSaved);
 
 // ---------- deck list ----------
 
@@ -540,7 +635,7 @@ async function renderList() {
     ...cards.map((c) =>
       el('li', { class: 'card-row' },
         playButton(c.audio),
-        el('div', { class: 'text', onclick: () => editCard(c.id) },
+        el('div', { class: 'text', onclick: () => { haptic('tap'); editCard(c.id); } },
           el('div', { class: 'primary-text' }, primaryText(c)),
           el('div', { class: 'secondary' }, [c.english, c.romanization && c.native].filter(Boolean).join(' · ')),
           showLang ? el('div', { class: 'lang' }, c.language) : null
@@ -553,13 +648,13 @@ async function renderList() {
   if (!all.length) {
     $('#card-list').append(
       el('li', { class: 'empty' },
-        el('div', { class: 'emoji' }, '🗂️'),
-        el('div', {}, 'No cards yet.'),
+        el('div', { class: 'mascot-slot', html: mascot('happy') }),
+        el('div', {}, 'No cards yet. Let\u2019s add one!'),
         el('button', { class: 'btn primary', onclick: () => showView('add') }, 'Add your first card')
       )
     );
   } else if (!cards.length) {
-    $('#card-list').append(el('li', { class: 'empty' }, 'No matches.'));
+    $('#card-list').append(el('li', { class: 'empty' }, el('div', { class: 'mascot-slot', html: mascot('thinking') }), 'No matches.'));
   }
 }
 
@@ -617,7 +712,7 @@ async function renderMe() {
       class: `cell h${heatLevel(rec)}${key === today ? ' today' : ''}`,
       title: detail,
       'aria-label': detail,
-      onclick: () => ($('#heat-detail').textContent = detail),
+      onclick: () => { haptic('select'); $('#heat-detail').textContent = detail; },
     }));
   }
   $('#heatmap').replaceChildren(...cells);
@@ -638,6 +733,8 @@ async function renderMe() {
   $('#set-goal').value = settings.goal;
   $('#set-new').value = settings.newPerDay;
   $('#set-reminders').checked = settings.reminders;
+  $('#set-sounds').checked = feedbackSettings.sounds;
+  $('#set-haptics').checked = feedbackSettings.haptics;
   $('#set-reminder-hour').value = settings.reminderHour;
   $('#reminder-time-row').hidden = !settings.reminders;
 }
@@ -647,6 +744,10 @@ $('#set-reminder-hour').replaceChildren(
     el('option', { value: h }, new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' }))
   )
 );
+
+$('#set-sounds').addEventListener('change', (e) => { feedbackSettings.sounds = e.target.checked; sound('pop'); });
+$('#set-haptics').addEventListener('change', (e) => { feedbackSettings.haptics = e.target.checked; haptic('success'); });
+document.querySelectorAll('.settings select').forEach((sel) => sel.addEventListener('change', () => haptic('select')));
 
 $('#set-goal').addEventListener('change', async (e) => {
   settings.goal = Number(e.target.value);
@@ -761,7 +862,7 @@ function setMode(m) {
 }
 
 document.querySelectorAll('#review-mode button').forEach((b) =>
-  b.addEventListener('click', () => { setMode(b.dataset.mode); renderToday(); })
+  b.addEventListener('click', () => { haptic('select'); setMode(b.dataset.mode); renderToday(); })
 );
 $('#review-language').addEventListener('change', renderToday);
 
@@ -826,6 +927,7 @@ function showNext() {
   $('#review-prompt').replaceChildren(...promptFor(c).filter(Boolean));
   $('#review-answer').replaceChildren(...answerFor(c));
   $('#review-answer').hidden = true;
+  $('#flashcard').classList.remove('flipped', 'flash-good', 'flash-again');
   $('#reveal-btn').hidden = false;
   $('#grades').hidden = true;
   const card = $('#flashcard');
@@ -836,6 +938,9 @@ function showNext() {
 
 function reveal() {
   const s = session;
+  haptic('tap');
+  sound('pop');
+  $('#flashcard').classList.add('flipped');
   $('#review-answer').hidden = false;
   $('#reveal-btn').hidden = true;
   $('#grades').hidden = false;
@@ -851,7 +956,13 @@ async function grade(g) {
   const card = s.current;
   if (!card) return;
   s.current = null;
-  buzz(g === 'again' ? [15, 30, 15] : 10);
+  haptic(g === 'again' ? 'warning' : 'success');
+  sound(g === 'again' ? 'again' : 'correct');
+  const fc = $('#flashcard');
+  fc.classList.remove('flash-good', 'flash-again');
+  void fc.offsetWidth;
+  fc.classList.add(g === 'again' ? 'flash-again' : 'flash-good');
+  await new Promise((r) => setTimeout(r, 220));
 
   if (!s.graded.has(card.id)) {
     s.graded.add(card.id);
@@ -872,6 +983,8 @@ async function grade(g) {
       s.goalJustMet = true;
       s.xp += XP.goal;
       toast(`🔥 Daily goal reached! +${XP.goal} XP`, 2400);
+      sound('goal');
+      haptic('celebrate');
     }
   }
 
@@ -901,7 +1014,7 @@ async function finishSession() {
   const { stats, days } = await loadStats();
   const today = days.find((d) => d.date === dayKey());
   const acc = Math.round((s.correct / s.reviews) * 100);
-  $('#done-emoji').textContent = s.goalJustMet ? '🔥' : perfect ? '✨' : acc >= 80 ? '🎉' : '💪';
+  $('#done-mascot').innerHTML = mascot(s.goalJustMet || perfect ? 'star' : acc >= 70 ? 'excited' : 'happy');
   $('#done-title').textContent = s.goalJustMet
     ? stats.streak > 1 ? `${stats.streak}-day streak!` : 'Streak started!'
     : perfect ? 'Flawless!' : 'Session complete';
@@ -918,6 +1031,7 @@ async function finishSession() {
   $('#progress-bar').style.width = '100%';
   $('#combo').hidden = true;
   if (s.goalJustMet || perfect) celebrate();
+  else { haptic('success'); sound('saved'); }
   checkBadges();
 }
 
@@ -932,7 +1046,8 @@ function celebrate() {
       })
     )
   );
-  buzz([30, 60, 30, 60, 60]);
+  haptic('celebrate');
+  sound('goal');
 }
 
 function endSession() {
@@ -943,6 +1058,7 @@ function endSession() {
 }
 
 $('#start-review').addEventListener('click', async () => {
+  haptic('heavy');
   const today = dayKey();
   const pool = reviewable(await getAllCards());
   const { due, fresh } = scheduledQueue(pool, today, await getDay(today));
@@ -960,6 +1076,7 @@ $('#start-practice').addEventListener('click', async () => {
     $('#review-empty').hidden = false;
     return;
   }
+  haptic('heavy');
   startSession(shuffle(pool), true);
 });
 
@@ -968,7 +1085,7 @@ $('#grades').addEventListener('click', (e) => {
   const b = e.target.closest('[data-grade]');
   if (b) grade(b.dataset.grade);
 });
-$('#end-review').addEventListener('click', () => (session?.reviews ? finishSession() : endSession()));
+$('#end-review').addEventListener('click', () => { haptic('tap'); session?.reviews ? finishSession() : endSession(); });
 $('#done-btn').addEventListener('click', endSession);
 
 document.addEventListener('keydown', (e) => {
@@ -990,6 +1107,7 @@ document.addEventListener('keydown', (e) => {
 // ---------- start up ----------
 
 $('#clean-audio').checked = prefs.get('cleanAudio') ?? true;
+fillMascots();
 setMode(mode);
 (async () => {
   settings = { ...DEFAULT_SETTINGS, ...(await getMeta('settings')) };

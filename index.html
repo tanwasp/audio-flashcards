@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0f766e">
+  <meta name="theme-color" content="#f6f5f3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141210" media="(prefers-color-scheme: dark)">
+  <link rel="preload" href="fonts/nunito-latin.woff2" as="font" type="font/woff2" crossorigin>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Flashcards">
   <link rel="manifest" href="manifest.webmanifest">
@@ -54,14 +56,18 @@
         </div>
         <p id="mode-hint" class="muted center small"></p>
         <select id="review-language" aria-label="Language"><option value="">All languages</option></select>
+        <div class="caught-up" id="caught-up" hidden>
+          <div class="mascot-slot small-mascot" data-mood="sleepy"></div>
+          <div><strong>All caught up!</strong><div class="muted small">Nothing due right now. Add new cards or practice anyway.</div></div>
+        </div>
         <button id="start-review" class="btn primary block big">Start review</button>
         <button id="start-practice" class="link center-block">Practice all cards instead</button>
         <p id="review-empty" class="muted center" hidden></p>
       </div>
 
       <div class="empty-hero" id="today-empty" hidden>
-        <div class="emoji">🎧</div>
-        <h2>Build your first deck</h2>
+        <div class="mascot-slot" data-mood="happy"></div>
+        <h2>Hi! Let's build your deck</h2>
         <p class="muted">Record a word, add what it means, and come back each day to keep your streak going.</p>
         <button class="btn primary" data-goto="add">Add a card</button>
       </div>
@@ -86,18 +92,57 @@
       <form id="card-form" novalidate>
         <input type="hidden" name="cardId">
 
-        <div class="audio-box">
-          <button type="button" id="record-btn" class="record" aria-label="Record">
-            <span class="dot"></span>
-          </button>
-          <div class="audio-side">
-            <div id="record-status" class="muted">Tap to record</div>
-            <audio id="audio-preview" controls hidden></audio>
-            <div class="row small">
-              <label class="link">Upload file<input type="file" name="audio" accept="audio/*" hidden></label>
-              <label class="check"><input type="checkbox" id="clean-audio" checked> Clean up audio</label>
-              <button type="button" id="remove-audio" class="link" hidden>Remove</button>
+        <div class="audio-box" id="audio-box" data-state="empty">
+          <div class="rec-area">
+            <button type="button" id="record-btn" class="record" aria-label="Record">
+              <span class="dot"></span>
+            </button>
+            <div class="rec-side">
+              <div id="record-status" class="rec-title">Tap to record</div>
+              <canvas id="level-meter" class="meter"></canvas>
+              <div class="rec-hint muted small">Say the word or phrase clearly</div>
+              <label class="link small upload">or upload a file<input type="file" name="audio" accept="audio/*" hidden></label>
             </div>
+          </div>
+
+          <div class="wave-area">
+            <div class="wave-row">
+              <button type="button" id="wave-play" class="play" aria-label="Play"></button>
+              <div class="wave" id="wave">
+                <canvas id="wave-canvas"></canvas>
+                <div class="shade left"></div><div class="shade right"></div>
+                <div class="handle start"><span></span></div><div class="handle end"><span></span></div>
+              </div>
+            </div>
+            <div class="wave-meta small muted">
+              <span id="wave-time">0:00.0</span>
+              <span id="trim-label"></span>
+              <span class="trim-tip">Tap to play from any point</span>
+            </div>
+            <div class="wave-actions normal">
+              <button type="button" id="trim-btn" class="chip-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12"/></svg>Trim
+              </button>
+              <button type="button" id="rerecord-btn" class="chip-btn">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Redo
+              </button>
+              <label class="chip-btn toggle"><input type="checkbox" id="clean-audio" checked hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 4.6L18.5 9.5l-4.6 1.9L12 16l-1.9-4.6L5.5 9.5l4.6-1.9z"/><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>Clean up
+              </label>
+              <button type="button" id="remove-audio" class="chip-btn danger" aria-label="Remove audio">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+              </button>
+            </div>
+            <div class="wave-actions trim">
+              <button type="button" id="trim-cancel" class="btn">Cancel</button>
+              <button type="button" id="trim-reset" class="btn">Reset</button>
+              <button type="button" id="trim-done" class="btn primary grow">Keep selection</button>
+            </div>
+          </div>
+
+          <div class="processing">
+            <div class="shimmer"></div>
+            <span class="muted small">Cleaning up audio…</span>
           </div>
         </div>
 
@@ -180,6 +225,14 @@
           </select>
         </label>
         <label class="setting">
+          <span>Sounds<small>Little chimes for answers and goals</small></span>
+          <input type="checkbox" id="set-sounds" class="switch">
+        </label>
+        <label class="setting">
+          <span>Haptics<small>Vibration on taps and answers</small></span>
+          <input type="checkbox" id="set-haptics" class="switch">
+        </label>
+        <label class="setting">
           <span>Daily reminder<small id="reminder-note">Nudge me if I haven't hit my goal</small></span>
           <input type="checkbox" id="set-reminders" class="switch">
         </label>
@@ -227,7 +280,7 @@
 
       <div id="session-done" class="done" hidden>
         <div class="confetti" id="confetti" aria-hidden="true"></div>
-        <div class="emoji" id="done-emoji">🎉</div>
+        <div class="mascot-slot" id="done-mascot"></div>
         <h2 id="done-title">Session complete</h2>
         <p class="muted" id="done-sub"></p>
         <div class="tiles three">
@@ -258,6 +311,15 @@
       Progress
     </button>
   </nav>
+
+  <div id="saved-pop" class="saved-pop" role="status" hidden>
+    <div class="saved-mascot" id="saved-mascot"></div>
+    <div class="saved-text">
+      <strong id="saved-title">Saved!</strong>
+      <span id="saved-sub" class="muted small"></span>
+    </div>
+    <span class="xp-chip" id="saved-xp">+5 XP</span>
+  </div>
 
   <div id="toast" role="status" hidden></div>
 

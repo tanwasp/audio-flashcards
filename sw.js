@@ -2,7 +2,7 @@
 // cache so the app opens offline. Card data lives in IndexedDB, not here.
 // Also sends the daily reminder (Periodic Background Sync, where supported).
 
-const CACHE = 'audio-flashcards-v4';
+const CACHE = 'audio-flashcards-v5';
 const SHELL = [
   './',
   'index.html',
@@ -10,6 +10,10 @@ const SHELL = [
   'audio.js',
   'srs.js',
   'game.js',
+  'waveform.js',
+  'feedback.js',
+  'fonts/nunito-latin.woff2',
+  'fonts/nunito-latin-ext.woff2',
   'styles.css',
   'manifest.webmanifest',
   'icons/icon-180.png',

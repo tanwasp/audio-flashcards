@@ -17,6 +17,44 @@ export async function cleanAudio(blob) {
   return encodeWav(trimmed, SAMPLE_RATE);
 }
 
+// Decode any audio file to mono samples at SAMPLE_RATE, for the waveform and trimming.
+export async function decodeMono(blob) {
+  const decoded = await decode(blob);
+  const ctx = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * SAMPLE_RATE)), SAMPLE_RATE);
+  const src = ctx.createBufferSource();
+  src.buffer = decoded;
+  src.connect(ctx.destination);
+  src.start();
+  return { samples: (await ctx.startRendering()).getChannelData(0), rate: SAMPLE_RATE };
+}
+
+// Loudness of `n` equal slices, scaled so the loudest is 1.
+export function peaks(samples, n) {
+  const out = new Float32Array(n);
+  const size = samples.length / n;
+  let max = 0;
+  for (let i = 0; i < n; i++) {
+    let peak = 0;
+    const end = Math.min(samples.length, Math.floor((i + 1) * size));
+    for (let j = Math.floor(i * size); j < end; j++) peak = Math.max(peak, Math.abs(samples[j]));
+    out[i] = peak;
+    max = Math.max(max, peak);
+  }
+  if (max > 0) for (let i = 0; i < n; i++) out[i] /= max;
+  return out;
+}
+
+// Keep the part between `start` and `end` seconds, with short fades so the cut doesn't click.
+export function crop(samples, rate, start, end) {
+  const out = samples.slice(Math.floor(start * rate), Math.ceil(end * rate));
+  const fade = Math.min(Math.floor(0.008 * rate), Math.floor(out.length / 2));
+  for (let i = 0; i < fade; i++) {
+    out[i] *= i / fade;
+    out[out.length - 1 - i] *= i / fade;
+  }
+  return encodeWav(out, rate);
+}
+
 async function decode(blob) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   try {
