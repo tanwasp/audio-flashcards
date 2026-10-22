@@ -1,6 +1,7 @@
 // Audio Flashcards: flashcards with audio, stored locally in IndexedDB.
 
-import { createWaveEditor, playClip, resamplePeaks } from './waveform.js';
+import { createWaveEditor, resamplePeaks } from './waveform.js';
+import { playRange, stop as stopAudio, isPlaying } from './player.js';
 import { haptic, sound, mascot, confirmSheet, feedbackSettings, audioCtx } from './feedback.js';
 import { dayKey, addDays, daysBetween, isDue, isNew, schedule, formatInterval } from './srs.js';
 import { XP, BADGES, emptyDay, summarize, earnedBadges } from './game.js';
@@ -132,33 +133,19 @@ function fillMascots(root = document) {
 const PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
 const STOP_ICON = '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 
-const player = new Audio();
-let playingBtn = null;
-
-function resetPlayingBtn() {
-  if (playingBtn) {
-    playingBtn.innerHTML = PLAY_ICON;
-    playingBtn.classList.remove('playing');
-    playingBtn = null;
-  }
-}
-player.addEventListener('ended', resetPlayingBtn);
-player.addEventListener('pause', resetPlayingBtn);
-
-// Play a card's audio, only the trimmed part if it has one.
+// Play a card's audio (only the trimmed part, if it has one) and show it on `btn`.
+// The button flips to "stop" straight away, so a slow start still feels responsive.
 function play(card, btn) {
-  if (playingBtn === btn) {
-    player.pause();
+  if (btn.owner && (isPlaying(btn.owner) || btn.classList.contains('playing'))) {
+    stopAudio();
     return;
   }
-  player.pause();
-  if (player.src) URL.revokeObjectURL(player.src);
-  player.src = URL.createObjectURL(card.audio);
-  playClip(player, card.audioTrim?.start ?? 0, card.audioTrim?.end ?? null).then(() => {
-    playingBtn = btn;
-    btn.innerHTML = STOP_ICON;
-    btn.classList.add('playing');
-  }).catch(() => {});
+  const reset = () => { btn.innerHTML = PLAY_ICON; btn.classList.remove('playing'); };
+  btn.owner = { onStop: reset };
+  btn.innerHTML = STOP_ICON;
+  btn.classList.add('playing');
+  playRange(card.audio, { from: card.audioTrim?.start ?? 0, to: card.audioTrim?.end ?? null, owner: btn.owner })
+    .then((ok) => { if (!ok && !isPlaying(btn.owner)) reset(); });
 }
 
 function playButton(card, big = false) {
@@ -171,8 +158,8 @@ function playButton(card, big = false) {
 // ---------- navigation ----------
 
 function showView(name) {
-  player.pause();
-  editor.pause();
+  stopAudio();
+  if (name !== 'add') stopRecording();
   document.querySelectorAll('.view').forEach((v) => {
     const show = v.id === `view-${name}`;
     if (show && v.hidden) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); }
@@ -188,9 +175,10 @@ function showView(name) {
 
 document.querySelectorAll('.tabbar button').forEach((b) =>
   b.addEventListener('click', () => {
-    if (b.classList.contains('active')) return;
+    const editing = b.dataset.view === 'add' && form.cardId.value;
+    if (b.classList.contains('active') && !editing) return;
     haptic('select');
-    if (b.dataset.view === 'add' && form.cardId.value) startNewCard();
+    if (editing) startNewCard();
     showView(b.dataset.view);
   })
 );
@@ -381,13 +369,24 @@ $('#remove-audio').addEventListener('click', async () => {
 let recorder = null;
 let recordTimer = null;
 let stopMeter = null;
+let micOpening = false;
+let recordingSaved = Promise.resolve(); // settles once a stopped recording is in the editor
+
+// Stop and keep what was recorded (also used when leaving the screen mid-recording).
+function stopRecording() {
+  if (recorder?.state === 'recording') recorder.stop();
+  // Never wait forever if the recorder misbehaves.
+  return Promise.race([recordingSaved, new Promise((r) => setTimeout(r, 3000))]);
+}
 
 async function toggleRecording() {
   const btn = $('#record-btn');
   if (recorder) {
-    if (recorder.state === 'recording') recorder.stop();
+    stopRecording();
     return;
   }
+  if (micOpening) return;
+  micOpening = true;
   audioCtx(); // set up audio inside the tap, before the mic opens (iPhone needs this)
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -398,6 +397,8 @@ async function toggleRecording() {
     recorder = new MediaRecorder(stream);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.onstart = () => (started = Date.now());
+    let saved;
+    recordingSaved = new Promise((r) => (saved = r));
     recorder.onstop = () => {
       const duration = (Date.now() - started) / 1000;
       stream.getTracks().forEach((t) => t.stop());
@@ -408,10 +409,9 @@ async function toggleRecording() {
       haptic('heavy');
       const type = recorder.mimeType;
       recorder = null;
-      setClip({ blob: new Blob(chunks, { type }), peaks: resamplePeaks(levels), duration, trim: null });
+      setClip({ blob: new Blob(chunks, { type }), peaks: resamplePeaks(levels), duration, trim: null }).finally(saved);
     };
-    player.pause();
-    editor.pause();
+    stopAudio();
     recorder.start();
     haptic('heavy');
     btn.classList.add('recording');
@@ -428,6 +428,8 @@ async function toggleRecording() {
     recorder = null;
     haptic('error');
     toast('Microphone not available');
+  } finally {
+    micOpening = false;
   }
 }
 $('#record-btn').addEventListener('click', toggleRecording);
@@ -452,20 +454,39 @@ function startNewCard() {
 }
 
 form.addEventListener('reset', () => {
+  // Leaving an edit brings back the new card that was being written; otherwise
+  // (Clear, or after saving a new card) that draft is discarded.
+  const wasEditing = !!form.cardId.value;
   // Runs before the browser clears the fields; finish once they're cleared.
   setTimeout(() => {
     form.cardId.value = '';
-    form.language.value = prefs.get('lastLanguage') ?? '';
     $('#form-title').textContent = 'New card';
     $('#delete-btn').hidden = true;
     $('#form-error').hidden = true;
-    clearDraft();
-    setClip(null, { saveDraft: false });
+    if (wasEditing) {
+      restoreDraft();
+    } else {
+      clearDraft();
+      form.language.value = prefs.get('lastLanguage') ?? '';
+      setClip(null, { saveDraft: false });
+    }
   });
 });
 
+let saving = false;
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (saving) return;
+  saving = true;
+  try {
+    await saveCard();
+  } finally {
+    saving = false;
+  }
+});
+
+async function saveCard() {
+  await stopRecording();
   const v = Object.fromEntries(TEXT_FIELDS.map((k) => [k, form[k].value.trim()]));
   const problem =
     !v.romanization && !v.native ? 'Add the romanization or the written form.' :
@@ -510,7 +531,7 @@ form.addEventListener('submit', async (e) => {
     form.romanization.focus();
   }
   checkBadges();
-});
+}
 
 $('#delete-btn').addEventListener('click', async () => {
   const id = form.cardId.value;
@@ -542,11 +563,11 @@ async function editCard(id) {
 }
 
 async function restoreDraft() {
-  const draft = prefs.get('draft');
-  form.language.value = prefs.get('lastLanguage') ?? '';
-  if (draft) for (const k of TEXT_FIELDS) if (draft[k]) form[k].value = draft[k];
+  const draft = prefs.get('draft') ?? {};
+  for (const k of TEXT_FIELDS) form[k].value = draft[k] ?? '';
+  form.language.value ||= prefs.get('lastLanguage') ?? '';
   const audio = await getDraftAudio();
-  if (audio) await setClip({ blob: audio, trim: null, ...prefs.get('draftClip') }, { saveDraft: false });
+  await setClip(audio ? { blob: audio, trim: null, ...prefs.get('draftClip') } : null, { saveDraft: false });
 }
 
 const SAVED_LINES = ['Into the deck it goes!', 'Nice one!', 'Your deck is growing 🌱', 'Got it, saved!', 'Another one for the collection'];
@@ -895,8 +916,9 @@ function startSession(cards, practice) {
 }
 
 function showNext() {
-  player.pause();
+  stopAudio();
   const s = session;
+  if (!s || s.finished) return;
   s.current = s.queue.shift();
   $('#progress-bar').style.width = `${s.total ? (s.done / s.total) * 100 : 0}%`;
   if (!s.current) {
@@ -920,6 +942,7 @@ function showNext() {
 
 function reveal() {
   const s = session;
+  if (!s?.current) return;
   haptic('tap');
   sound('pop');
   $('#flashcard').classList.add('flipped');
@@ -945,6 +968,7 @@ async function grade(g) {
   void fc.offsetWidth;
   fc.classList.add(g === 'again' ? 'flash-again' : 'flash-good');
   await new Promise((r) => setTimeout(r, 220));
+  if (session !== s || s.finished) return; // session ended meanwhile
 
   if (!s.graded.has(card.id)) {
     s.graded.add(card.id);
@@ -970,6 +994,7 @@ async function grade(g) {
     }
   }
 
+  if (session !== s || s.finished) return;
   s.combo = g === 'again' ? 0 : s.combo + 1;
   $('#combo').hidden = s.combo < 3;
   $('#combo').textContent = `🔥 ${s.combo}`;
@@ -988,7 +1013,9 @@ async function grade(g) {
 
 async function finishSession() {
   const s = session;
-  player.pause();
+  if (!s || s.finished) return;
+  s.finished = true;
+  stopAudio();
   if (!s.reviews) { endSession(); return; }
   const perfect = s.reviews >= 10 && s.correct === s.reviews;
   if (perfect) { profile.perfectSessions = (profile.perfectSessions ?? 0) + 1; await saveProfile(); }
@@ -1033,13 +1060,14 @@ function celebrate() {
 }
 
 function endSession() {
-  player.pause();
+  stopAudio();
   session = null;
   $('#confetti').replaceChildren();
   showView('today');
 }
 
 $('#start-review').addEventListener('click', async () => {
+  if (session) return;
   haptic('heavy');
   const today = dayKey();
   const pool = reviewable(await getAllCards());
@@ -1052,6 +1080,7 @@ $('#start-review').addEventListener('click', async () => {
 });
 
 $('#start-practice').addEventListener('click', async () => {
+  if (session) return;
   const pool = reviewable(await getAllCards());
   if (!pool.length) {
     $('#review-empty').textContent = mode === 'audio' ? 'No cards with audio yet.' : 'No cards yet. Add some first.';
@@ -1106,6 +1135,7 @@ setMode(mode);
 
 // Back from the background on a new day: refresh what's due.
 document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { stopAudio(); stopRecording(); }
   if (document.visibilityState === 'visible' && !$('#view-today').hidden) renderToday();
 });
 

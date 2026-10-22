@@ -1,22 +1,14 @@
 // Decoding audio files for their waveform. Recordings made in the app don't need this
 // (their waveform comes from the level meter); it's for uploaded files and old cards.
 
-const SAMPLE_RATE = 8000; // plenty for drawing a waveform
+import { audioCtx } from './feedback.js';
 
+// Uses the app's one shared AudioContext: creating extra ones can interrupt playback on iPhone.
 export async function decodeMono(blob) {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  let decoded;
-  try {
-    decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
-  } finally {
-    ctx.close();
-  }
-  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * SAMPLE_RATE)), SAMPLE_RATE);
-  const src = off.createBufferSource();
-  src.buffer = decoded;
-  src.connect(off.destination);
-  src.start();
-  return { samples: (await off.startRendering()).getChannelData(0), rate: SAMPLE_RATE };
+  const ctx = audioCtx();
+  if (!ctx) throw new Error('no Web Audio');
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  return { samples: decoded.getChannelData(0), rate: decoded.sampleRate };
 }
 
 // Loudness of `n` equal slices, scaled so the loudest is 1.

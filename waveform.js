@@ -8,6 +8,7 @@
 
 import { decodeMono, peaks as decodePeaks } from './audio.js';
 import { haptic, audioCtx } from './feedback.js';
+import { playRange as play, stop, isPlaying, currentTime } from './player.js';
 
 export const PEAK_COUNT = 160; // waveform resolution stored with a card
 const BAR = 3;
@@ -16,41 +17,6 @@ const MIN_LEN = 0.15; // seconds; shortest clip trimming allows
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fmt = (s) => `${Math.floor(s / 60)}:${(Math.max(0, s) % 60).toFixed(1).padStart(4, '0')}`;
-
-// ---------- playing part of a clip ----------
-
-const stopAt = new WeakMap();
-const watched = new WeakSet();
-
-// Play `el` from `from` to `to` seconds. iPhone Safari doesn't load a clip's metadata
-// until it starts playing, so seeking may have to wait; it stays muted until then so
-// the trimmed-off start isn't heard.
-export function playClip(el, from = 0, to = null) {
-  stopAt.set(el, to);
-  if (!watched.has(el)) {
-    watched.add(el);
-    el.addEventListener('playing', () => {
-      const check = () => {
-        if (el.paused) return;
-        const end = stopAt.get(el);
-        if (end != null && el.currentTime >= end) el.pause();
-        else requestAnimationFrame(check);
-      };
-      requestAnimationFrame(check);
-    });
-  }
-  const seek = () => { try { el.currentTime = from; } catch {} };
-  if (el.readyState >= 1) {
-    seek();
-  } else if (from > 0.01) {
-    el.muted = true;
-    const unmute = () => (el.muted = false);
-    el.addEventListener('loadedmetadata', seek, { once: true });
-    el.addEventListener('seeked', unmute, { once: true });
-    setTimeout(unmute, 800);
-  }
-  return el.play();
-}
 
 // Resample levels to `n` bars (taking the loudest in each) scaled so the loudest is 1.
 export function resamplePeaks(levels, n = PEAK_COUNT) {
@@ -93,9 +59,6 @@ export function createWaveEditor(root, { onTrim }) {
   const $ = (s) => root.querySelector(s);
   const canvas = $('#wave-canvas');
   const wave = $('#wave');
-  const audio = new Audio();
-  audio.preload = 'auto';
-  let url = null;
   let clip = null; // { blob, peaks, duration, trim: { start, end } | null }
   let trimming = false;
   let sel = { start: 0, end: 0 }; // seconds, while trimming
@@ -109,7 +72,8 @@ export function createWaveEditor(root, { onTrim }) {
     const n = Math.floor((width + GAP) / (BAR + GAP));
     const d = clip.duration || 1;
     const { start, end } = kept();
-    const playing = !audio.paused;
+    const playing = isPlaying(me);
+    const now = currentTime();
     const on = css('--accent');
     const off = css('--wave');
     for (let i = 0; i < n; i++) {
@@ -117,7 +81,7 @@ export function createWaveEditor(root, { onTrim }) {
       const level = clip.peaks[Math.min(clip.peaks.length - 1, Math.floor((i / n) * clip.peaks.length))];
       const h = Math.max(3, level * (height - 4));
       const inside = t >= start && t <= end;
-      bar(g, i * (BAR + GAP), h, height, playing && inside && t <= audio.currentTime ? on : off, inside || trimming ? 1 : 0.35);
+      bar(g, i * (BAR + GAP), h, height, playing && inside && t <= now ? on : off, inside || trimming ? 1 : 0.35);
     }
     if (trimming) {
       wave.style.setProperty('--s', `${(sel.start / d) * 100}%`);
@@ -128,32 +92,37 @@ export function createWaveEditor(root, { onTrim }) {
 
   function showTime() {
     const { start, end } = kept();
-    $('#wave-time').textContent = audio.paused ? fmt(end - start) : fmt(audio.currentTime - start);
+    $('#wave-time').textContent = isPlaying(me) ? fmt(currentTime() - start) : fmt(end - start);
   }
 
   function tick() {
     draw();
     showTime();
-    if (!audio.paused) raf = requestAnimationFrame(tick);
+    if (isPlaying(me)) raf = requestAnimationFrame(tick);
   }
 
   function setPlayIcon() {
     const btn = $('#wave-play');
-    btn.classList.toggle('playing', !audio.paused);
-    btn.innerHTML = audio.paused
-      ? '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>'
-      : '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>';
+    const playing = isPlaying(me);
+    btn.classList.toggle('playing', playing);
+    btn.innerHTML = playing
+      ? '<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1.5"/><rect x="14" y="5" width="4" height="14" rx="1.5"/></svg>'
+      : '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
   }
-  audio.addEventListener('play', () => { setPlayIcon(); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); });
-  audio.addEventListener('pause', () => { setPlayIcon(); draw(); showTime(); });
-  audio.addEventListener('ended', () => audio.pause());
+
+  // This editor's claim on the shared player.
+  const me = {
+    onPlay() { setPlayIcon(); cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); },
+    onStop() { cancelAnimationFrame(raf); setPlayIcon(); draw(); showTime(); },
+  };
+  const pauseMine = () => { if (isPlaying(me)) stop(); };
 
   function playRange(from, to) {
-    playClip(audio, from, to).catch(() => {});
+    if (clip?.blob) play(clip.blob, { from, to, owner: me });
   }
 
   $('#wave-play').addEventListener('click', () => {
-    if (!audio.paused) { audio.pause(); return; }
+    if (isPlaying(me)) { stop(); return; }
     haptic('tap');
     const { start, end } = kept();
     playRange(start, end);
@@ -178,7 +147,7 @@ export function createWaveEditor(root, { onTrim }) {
     wave.setPointerCapture(e.pointerId);
     wave.classList.add(`drag-${dragging}`);
     haptic('select');
-    audio.pause();
+    pauseMine();
     moveHandle(t);
   });
   wave.addEventListener('pointermove', (e) => dragging && moveHandle(timeAt(e)));
@@ -207,7 +176,7 @@ export function createWaveEditor(root, { onTrim }) {
     if (on) sel = { ...(clip.trim ?? { start: 0, end: clip.duration }) };
     trimming = on;
     root.dataset.state = on ? 'trimming' : 'ready';
-    audio.pause();
+    pauseMine();
     requestAnimationFrame(() => { draw(); showTime(); });
   }
 
@@ -263,42 +232,25 @@ export function createWaveEditor(root, { onTrim }) {
     };
   }
 
-  // Duration from the audio element; MediaRecorder files in Chrome report Infinity.
-  const elementDuration = () => new Promise((resolve) => {
-    const done = () => resolve(Number.isFinite(audio.duration) ? audio.duration : 0);
-    if (audio.readyState >= 1) return done();
-    audio.addEventListener('loadedmetadata', done, { once: true });
-    audio.addEventListener('error', () => resolve(0), { once: true });
-    setTimeout(() => resolve(0), 1500); // iPhone may not load metadata before playing
-  });
-
   return {
     meter,
-    pause: () => audio.pause(),
+    pause: pauseMine,
     // Show a clip: { blob, peaks?, duration?, trim? }. Fills in the peaks and duration it
     // can work out and returns the clip so they can be saved with the card.
     async show(newClip) {
-      audio.pause();
+      pauseMine();
       trimming = false;
-      if (url) URL.revokeObjectURL(url);
       clip = newClip;
-      if (!clip?.blob) {
-        url = null;
-        audio.removeAttribute('src');
-        return null;
-      }
+      if (!clip?.blob) return null;
       const mine = clip;
-      url = URL.createObjectURL(clip.blob);
-      audio.src = url;
       if (!clip.peaks || !clip.duration) {
-        const playable = await elementDuration();
+        // Uploaded files and cards saved before waveforms were stored.
         let decoded = null;
         try { decoded = await decodeMono(clip.blob); } catch {}
         if (clip !== mine) return null; // replaced meanwhile
         const decodedLen = decoded ? decoded.samples.length / decoded.rate : 0;
-        clip.duration ||= playable || decodedLen;
-        // Use the decoded waveform only if it covers the clip (see the note at the top).
-        clip.peaks ||= decoded && decodedLen >= clip.duration * 0.9
+        clip.duration ||= decodedLen;
+        clip.peaks ||= decoded
           ? Array.from(decodePeaks(decoded.samples, PEAK_COUNT), (v) => Math.round(v * 100) / 100)
           : new Array(PEAK_COUNT).fill(0.3);
       }
